@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import APIException
@@ -49,57 +49,68 @@ class OrderViewSet(viewsets.ModelViewSet):
                 self._process_eco_points(order)
             except Exception as e:
                 logger.error(f"确认收货发放积分失败: order_id={order.id}, error={str(e)}")
+                raise APIException(
+                    detail=ERRORS.get("POINTS_GRANT_FAILED"),
+                    code="POINTS_GRANT_FAILED",
+                )
 
         return Response(OrderSerializer(order).data)
 
     def _process_eco_points(self, order):
         items_with_detail = self._enrich_order_items(order.items)
 
-        seller_id = items_with_detail[0]["seller_id"] if items_with_detail else None
-        if not seller_id:
+        if not items_with_detail:
             logger.warning(f"订单无有效商品，跳过积分发放: order_id={order.id}")
             return
 
         result = PointGrantService.grant_eco_trade_points(
             order_id=order.id,
             buyer_id=order.buyer_id,
-            seller_id=seller_id,
             items=items_with_detail,
         )
 
-        credit = SellerCreditService.refresh_seller_credit(
-            seller_id=seller_id,
-            earned_points=result["seller_points"],
-        )
+        if result["buyer_points"] > 0:
+            NotificationService.send_eco_points_notification(
+                user_id=order.buyer_id,
+                points=result["buyer_points"],
+                reason="感谢您支持环保循环消费",
+                order_id=order.id,
+                role="buyer",
+            )
 
-        NotificationService.send_eco_points_notification(
-            user_id=order.buyer_id,
-            points=result["buyer_points"],
-            reason="感谢您支持环保循环消费",
-            order_id=order.id,
-            role="buyer",
-        )
+        seller_points_map = result["seller_points_map"]
+        for seller_id, earned_points in seller_points_map.items():
+            if earned_points <= 0:
+                continue
 
-        NotificationService.send_eco_points_notification(
-            user_id=seller_id,
-            points=result["seller_points"],
-            reason="您的商品为环保事业做出了贡献",
-            order_id=order.id,
-            role="seller",
-        )
+            credit = SellerCreditService.refresh_seller_credit(
+                seller_id=seller_id,
+                earned_points=earned_points,
+            )
 
-        NotificationService.send_seller_credit_notification(
-            seller_id=seller_id,
-            credit_score=credit.credit_score,
-            trade_count=credit.trade_count,
-        )
+            NotificationService.send_eco_points_notification(
+                user_id=seller_id,
+                points=earned_points,
+                reason="您的商品为环保事业做出了贡献",
+                order_id=order.id,
+                role="seller",
+            )
+
+            NotificationService.send_seller_credit_notification(
+                seller_id=seller_id,
+                credit_score=credit.credit_score,
+                trade_count=credit.trade_count,
+            )
 
         logger.info(
             f"确认收货积分发放完成: order_id={order.id}, "
-            f"buyer_id={order.buyer_id}, seller_id={seller_id}"
+            f"buyer_id={order.buyer_id}, buyer_points={result['buyer_points']}, "
+            f"seller_count={len(seller_points_map)}, sellers={dict(seller_points_map)}"
         )
 
     def _enrich_order_items(self, items):
+        if not items:
+            return []
         product_ids = [item["product_id"] for item in items]
         products = Product.objects.filter(id__in=product_ids)
         product_map = {p.id: p for p in products}

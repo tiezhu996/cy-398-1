@@ -38,45 +38,56 @@ class PointGrantService:
 
     @staticmethod
     @transaction.atomic
-    def grant_eco_trade_points(order_id, buyer_id, seller_id, items):
+    def grant_eco_trade_points(order_id, buyer_id, items):
         from app.utils.points import calculate_points
+        from collections import defaultdict
 
         total_buyer_points = 0
-        total_seller_points = 0
+        seller_points_map = defaultdict(int)
 
         for item in items:
             category = item.get("category", "books")
             weight_kg = float(item.get("weight_kg", 1))
             quantity = int(item.get("quantity", 1))
+            item_seller_id = item.get("seller_id")
+            if not item_seller_id:
+                continue
             item_points = calculate_points(category, weight_kg) * quantity
             total_buyer_points += item_points
-            total_seller_points += item_points
+            seller_points_map[item_seller_id] += item_points
 
-        buyer_ledger = PointGrantService.grant_points(
-            user_id=buyer_id,
-            order_id=order_id,
-            points=total_buyer_points,
-            reason_code="ECO_TRADE_BUYER",
-        )
+        buyer_ledger = None
+        if total_buyer_points > 0:
+            buyer_ledger = PointGrantService.grant_points(
+                user_id=buyer_id,
+                order_id=order_id,
+                points=total_buyer_points,
+                reason_code="ECO_TRADE_BUYER",
+            )
 
-        seller_ledger = PointGrantService.grant_points(
-            user_id=seller_id,
-            order_id=order_id,
-            points=total_seller_points,
-            reason_code="ECO_TRADE_SELLER",
-        )
+        seller_ledgers = {}
+        for seller_id, seller_points in seller_points_map.items():
+            if seller_points > 0:
+                ledger = PointGrantService.grant_points(
+                    user_id=seller_id,
+                    order_id=order_id,
+                    points=seller_points,
+                    reason_code="ECO_TRADE_SELLER",
+                )
+                seller_ledgers[seller_id] = ledger
 
         logger.info(
             f"环保交易积分发放完成: order_id={order_id}, "
             f"buyer_id={buyer_id}, buyer_points={total_buyer_points}, "
-            f"seller_id={seller_id}, seller_points={total_seller_points}"
+            f"seller_count={len(seller_points_map)}, "
+            f"sellers={dict(seller_points_map)}"
         )
 
         return {
             "buyer_ledger": buyer_ledger,
-            "seller_ledger": seller_ledger,
+            "seller_ledgers": seller_ledgers,
             "buyer_points": total_buyer_points,
-            "seller_points": total_seller_points,
+            "seller_points_map": dict(seller_points_map),
         }
 
 
