@@ -1,0 +1,31 @@
+name: cycleapi
+services:
+  backend:
+    container_name: cycleapi-backend
+    build:
+      context: ./backend
+    env_file: .env
+    ports:
+      - "19413:8000"
+    volumes:
+      - ./backend/media:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    container_name: cycleapi-postgres
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - cycleapi-postgres-data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  cycleapi-postgres-data:

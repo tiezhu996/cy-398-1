@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS bootstrap_marker (id SERIAL PRIMARY KEY, name VARCHAR(64) UNIQUE NOT NULL);
+INSERT INTO bootstrap_marker(name) VALUES ('cycleapi') ON CONFLICT DO NOTHING;
